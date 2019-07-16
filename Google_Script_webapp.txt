@@ -1,0 +1,97 @@
+/**
+ * @param e
+ * @param {Object} e.parameter
+ * @param {string} e.parameter.url - Spreadsheet URL
+ * @param {string} e.parameter.sheet - Data sheet
+ * @param {string} e.parameter.range - Data range in A1 notation
+ * @param {string} [e.parameter.templateSheet] - Template sheet
+ * @param {string} [e.parameter.templateRange] - Template range in A1 notation
+ * @param {string} [e.parameter.sig] - Last modification timestamp of the spreadsheet
+ * @param {string} e.parameters.callback
+ * @return {ContentService.TextOutput}
+ */
+function doGet(e) {
+	if (!e){
+		return ContentService.createTextOutput('console.log("No parameters")').setMimeType(ContentService.MimeType.JAVASCRIPT);
+	}
+
+	var currentUser = Session.getActiveUser().getEmail(),
+		ssUrl =  e.parameter.url,
+		sheetName = e.parameter.sheet,
+		a1Notation = e.parameter.range,
+		sps = SpreadsheetApp.openByUrl(ssUrl),
+		sheet = sps.getSheetByName(sheetName),
+		range = sheet.getRange(a1Notation),
+		data = range.getValues(),
+		formattedData = range.getDisplayValues(),
+		dt = {cols:[], rows:[]},
+		permissionsCol = null,
+		firstCol = range.getColumn(),
+		i, row, output,
+		sig = DriveApp.getFileById(sps.getId()).getLastUpdated().getTime();
+
+	if(e.parameter.sig && sig == e.parameter.sig) {
+		output = e.parameters.callback + '(' + JSON.stringify({status: "error", reason: "not_modified", sig: sig}) + ')';
+		return ContentService.createTextOutput(output).setMimeType(ContentService.MimeType.JAVASCRIPT);
+	}
+	
+	for (i = 0; i < data[0].length; i++) {
+		if (data[1][i].indexOf('Permissions') != -1) permissionsCol = i;
+		dt.cols.push({id:numToA(firstCol+i), label:data[0][i] + ' ' + data[1][i].replace('Permissions', ''), type: 'string', isNumber:true, isDate:true, isEmpty:true});
+	}
+	for (i = 2; i < data.length; i++) {
+		if (!(permissionsCol == null || (currentUser != '' && data[i][permissionsCol].indexOf(currentUser) != -1) || data[i][permissionsCol].toLowerCase() == 'public')) continue;
+
+		row = [];
+		for (j = 0; j < data[i].length; j++) {
+			if (isNaN(data[i][j])) dt.cols[j].isNumber = false;
+			if (data[i][j] != '') dt.cols[j].isEmpty = false;
+			if (data[i][j] instanceof Date == false) dt.cols[j].isDate = false;
+			else if(data[i][j].getFullYear() == 1899) {
+				dt.cols[j].isDate = false;
+				data[i][j] = data[i][j].getHours()+':'+(data[i][j].getMinutes()<10?'0':'')+data[i][j].getMinutes();
+			}
+			else {
+				data[i][j] = "Date("+data[i][j].getTime()+")";
+			}
+			row.push({v:data[i][j], f:formattedData[i][j]});
+		}
+		dt.rows.push({c:row});
+	}
+	for (i = 0; i < data[0].length; i++) {
+		if(dt.cols[i].isEmpty) dt.cols[i].type = 'string';
+		else if(dt.cols[i].isDate) dt.cols[i].type = 'datetime';
+		else if(dt.cols[i].isNumber) dt.cols[i].type = 'number';
+	}
+	
+	if ('templateSheet' in e.parameter && e.parameter.templateSheet.toLowerCase().indexOf('template') != -1){
+		var templateSheet = sps.getSheetByName(e.parameter.templateSheet),
+			templateRange = templateSheet.getRange(e.parameter.templateRange),
+			templateData = templateRange.getValues(),
+			tp = {cols:[], rows:[]};
+
+		for (i = 0; i < templateData[0].length; i++) tp.cols.push({id:i, label:templateData[0][i], type: 'string'});
+		for (i = 0; i < templateData.length; i++) {
+			row = [];
+			for(var j = 0; j < templateData[i].length; j++) row.push({v:templateData[i][j]});
+			tp.rows.push({c:row});
+		}
+		output = e.parameters.callback + '(' + JSON.stringify({dataTable: dt,template: tp, sig: sig}) + ')';
+	}
+	else{
+		output = e.parameters.callback + '(' + JSON.stringify({dataTable: dt, sig: sig}) + ')';
+	}
+
+	return ContentService.createTextOutput(output).setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+function numToA(num){
+	var a = '',modulo = 0;
+	for (var i = 0; i < 6; i++){
+		modulo = num % 26;
+		if (modulo == 0) {a = 'Z' + a; num = num / 26 - 1;}
+		else {a = String.fromCharCode(64 + modulo) + a; num = (num - modulo) / 26;}
+		if (num <= 0) break;
+	}
+	return a;
+}
